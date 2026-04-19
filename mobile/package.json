@@ -11,10 +11,12 @@
     "build:aab": "eas build -p android --profile production",
     "prebuild:android": "expo prebuild --platform android",
     "prebuild:android:clean": "expo prebuild --platform android --clean",
-    "build:apk:local": "npm run prebuild:android:clean && cd android && gradlew.bat assembleRelease",
-    "build:aab:local": "npm run prebuild:android:clean && cd android && gradlew.bat bundleRelease",
+    "build:apk:local": "npm run prebuild:android && cd android && gradlew.bat assembleRelease",
+    "build:aab:local": "npm run prebuild:android && cd android && gradlew.bat bundleRelease",
     "build:apk:local:quick": "npm run prebuild:android && cd android && gradlew.bat assembleRelease",
-    "build:aab:local:quick": "npm run prebuild:android && cd android && gradlew.bat bundleRelease"
+    "build:aab:local:quick": "npm run prebuild:android && cd android && gradlew.bat bundleRelease",
+    "build:apk:local:clean": "npm run prebuild:android:clean && cd android && gradlew.bat assembleRelease",
+    "build:aab:local:clean": "npm run prebuild:android:clean && cd android && gradlew.bat bundleRelease"
   },
   "dependencies": {
     "expo": "~51.0.0",

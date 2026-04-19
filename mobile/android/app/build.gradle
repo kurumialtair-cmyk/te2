@@ -138,7 +138,7 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Use release keystore for production builds, fallback to debug only if not configured.
+            // Use release keystore when provided; fallback to debug for local-only testing.
             signingConfig project.hasProperty('MYAPP_UPLOAD_STORE_FILE') ? signingConfigs.release : signingConfigs.debug
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
