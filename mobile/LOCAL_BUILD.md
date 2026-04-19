@@ -35,6 +35,26 @@ For App Bundle:
 npm run build:aab:local
 ```
 
+## 3.1) Make it an official signed release (required for production)
+
+Your project now supports release signing via Gradle properties. Add these lines to
+`mobile/android/gradle.properties` (or user-level `~/.gradle/gradle.properties`):
+
+```properties
+MYAPP_UPLOAD_STORE_FILE=../keystore/upload-keystore.jks
+MYAPP_UPLOAD_KEY_ALIAS=upload
+MYAPP_UPLOAD_STORE_PASSWORD=your_store_password
+MYAPP_UPLOAD_KEY_PASSWORD=your_key_password
+```
+
+Create the keystore once (from `mobile/android`):
+
+```bash
+keytool -genkeypair -v -storetype JKS -keystore ../keystore/upload-keystore.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Without these properties, release builds will fallback to debug signing (fine for local testing, not for official distribution).
+
 ### Faster rebuilds (without clean prebuild)
 
 ```bash
