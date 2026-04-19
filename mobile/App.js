@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+﻿import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,42 +8,62 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Animated,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { API_BASE } from './api';
+import { estimateOfflinePrice } from './offlineEstimator';
+import { BRAND_OPTIONS, getBrandTier } from './brandData';
+import { roundPriceForMarketplace } from './priceUtils';
 
-const CATEGORIES = [
-  'clothing',
-  'bags',
-  'shoes',
-  'accessories',
-  'electronics',
-  'other',
+const APP_NAME = 'Privies';
+const CATEGORIES = ['clothing', 'bags', 'shoes', 'accessories', 'electronics', 'other'];
+const MODES = [
+  { id: 'auto', label: 'Auto' },
+  { id: 'offline', label: 'Offline only' },
+  { id: 'online', label: 'Online only' },
 ];
 
 export default function App() {
+  const [step, setStep] = useState(1);
+  const [mode, setMode] = useState('auto');
   const [category, setCategory] = useState(null);
+  const [selectedBrand, setSelectedBrand] = useState('unbranded');
   const [imageFull, setImageFull] = useState(null);
   const [imageLabel, setImageLabel] = useState(null);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+
+  const needsLabelImage = selectedBrand !== 'unbranded';
+
+  const goToStep = useCallback(
+    (targetStep) => {
+      Animated.sequence([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+      setStep(targetStep);
+    },
+    [fadeAnim],
+  );
 
   const pickImage = useCallback(async (slot) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow access to photos to select images.');
+      Alert.alert('Permission needed', 'Allow photo access to select images.');
       return;
     }
-    const pickerResult = await ImagePicker.launchImageLibraryAsync({
+    const picked = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
     });
-    if (pickerResult.canceled) return;
-    const uri = pickerResult.assets[0].uri;
+    if (picked.canceled) return;
+    const uri = picked.assets[0].uri;
     if (slot === 'full') setImageFull(uri);
     else setImageLabel(uri);
   }, []);
@@ -54,280 +74,413 @@ export default function App() {
       Alert.alert('Permission needed', 'Allow camera access to capture images.');
       return;
     }
-    const pickerResult = await ImagePicker.launchCameraAsync({
+    const captured = await ImagePicker.launchCameraAsync({
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
     });
-    if (pickerResult.canceled) return;
-    const uri = pickerResult.assets[0].uri;
+    if (captured.canceled) return;
+    const uri = captured.assets[0].uri;
     if (slot === 'full') setImageFull(uri);
     else setImageLabel(uri);
   }, []);
 
+  const applyRoundedResult = useCallback((data) => {
+    const rounded = roundPriceForMarketplace(data.estimated_price_php || 0);
+    return {
+      ...data,
+      brand: (data.brand || selectedBrand || 'unbranded').toLowerCase(),
+      brand_tier: data.brand_tier || getBrandTier(data.brand || selectedBrand),
+      estimated_price_php: Number(rounded.toFixed(2)),
+    };
+  }, [selectedBrand]);
+
+  const estimateOnline = useCallback(async () => {
+    const formData = new FormData();
+    formData.append('category', category);
+    formData.append('image_full', { uri: imageFull, type: 'image/jpeg', name: 'full.jpg' });
+    if (needsLabelImage) {
+      formData.append('image_label', { uri: imageLabel, type: 'image/jpeg', name: 'label.jpg' });
+    } else {
+      formData.append('image_label', { uri: imageFull, type: 'image/jpeg', name: 'label.jpg' });
+    }
+
+    const res = await fetch(`${API_BASE}/estimate`, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err || `HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    return applyRoundedResult(data);
+  }, [API_BASE, applyRoundedResult, category, imageFull, imageLabel, needsLabelImage]);
+
   const estimatePrice = useCallback(async () => {
-    if (!category) {
-      Alert.alert('Select category', 'Please select an item category first.');
+    if (!category || !selectedBrand) {
+      Alert.alert('Pick details', 'Please choose a category and brand first.');
       return;
     }
-    if (!imageFull || !imageLabel) {
-      Alert.alert('Add images', 'Please add both full item and brand label images.');
+    if (!imageFull) {
+      Alert.alert('Add image', 'Please add the full item photo first.');
       return;
     }
+    if (needsLabelImage && !imageLabel) {
+      Alert.alert('Add image', 'Please add the brand label photo.');
+      return;
+    }
+
     setLoading(true);
     setResult(null);
+
     try {
-      const formData = new FormData();
-      formData.append('category', category);
-      formData.append('image_full', {
-        uri: imageFull,
-        type: 'image/jpeg',
-        name: 'full.jpg',
-      });
-      formData.append('image_label', {
-        uri: imageLabel,
-        type: 'image/jpeg',
-        name: 'label.jpg',
-      });
-      const res = await fetch(`${API_BASE}/estimate`, {
-        method: 'POST',
-        body: formData,
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(err || `HTTP ${res.status}`);
+      if (mode === 'offline') {
+        const offline = estimateOfflinePrice({
+          category,
+          imageFullUri: imageFull,
+          imageLabelUri: imageLabel,
+          selectedBrand,
+        });
+        setResult(offline);
+        goToStep(4);
+        return;
       }
-      const data = await res.json();
-      setResult(data);
-    } catch (e) {
-      Alert.alert('Error', e.message || 'Failed to get estimate. Is the backend running?');
+
+      const onlineData = await estimateOnline();
+      setResult(onlineData);
+      goToStep(4);
+    } catch (err) {
+      if (mode === 'online') {
+        Alert.alert('Online estimate failed', err.message || 'Backend unreachable.');
+        return;
+      }
+
+      const offline = estimateOfflinePrice({
+        category,
+        imageFullUri: imageFull,
+        imageLabelUri: imageLabel,
+        selectedBrand,
+      });
+      setResult(offline);
+      goToStep(4);
+      Alert.alert('Offline fallback', 'Network/backend unavailable. Offline estimate was used.');
     } finally {
       setLoading(false);
     }
-  }, [category, imageFull, imageLabel]);
+  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, mode, estimateOnline, goToStep]);
 
-  const reset = useCallback(() => {
+  const resetAll = useCallback(() => {
+    setStep(1);
     setCategory(null);
+    setSelectedBrand('unbranded');
     setImageFull(null);
     setImageLabel(null);
     setResult(null);
+    setLoading(false);
   }, []);
+
+  const header = useMemo(
+    () => (
+      <View style={styles.headerWrap}>
+        <Text style={styles.appName}>{APP_NAME}</Text>
+        <Text style={styles.tagline}>Smart thrift pricing, online or offline</Text>
+      </View>
+    ),
+    [],
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <StatusBar style="light" />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Thrift Price Estimator</Text>
-        <Text style={styles.subtitle}>Estimate resale price in PHP from condition & brand</Text>
+        {header}
 
-        <Text style={styles.section}>1. Select item category</Text>
-        <View style={styles.categoryRow}>
-          {CATEGORIES.map((c) => (
-            <TouchableOpacity
-              key={c}
-              style={[styles.categoryChip, category === c && styles.categoryChipActive]}
-              onPress={() => setCategory(c)}
-            >
-              <Text style={[styles.categoryText, category === c && styles.categoryTextActive]}>{c}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <Animated.View style={{ opacity: fadeAnim }}>
+          {step === 1 && (
+            <View>
+              <Text style={styles.sectionTitle}>Step 1 · Choose category and brand</Text>
 
-        <Text style={styles.section}>2. Full item image</Text>
-        <View style={styles.imageRow}>
-          <TouchableOpacity style={styles.imageBox} onPress={() => pickImage('full')}>
-            {imageFull ? (
-              <Image source={{ uri: imageFull }} style={styles.preview} />
-            ) : (
-              <Text style={styles.placeholder}>Tap to select or capture</Text>
-            )}
-          </TouchableOpacity>
-          <View style={styles.imageActions}>
-            <TouchableOpacity style={styles.btnSecondary} onPress={() => pickImage('full')}>
-              <Text style={styles.btnSecondaryText}>Gallery</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.btnSecondary} onPress={() => captureImage('full')}>
-              <Text style={styles.btnSecondaryText}>Camera</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+              <View style={styles.modeRow}>
+                {MODES.map((m) => (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={[styles.modeChip, mode === m.id && styles.modeChipActive]}
+                    onPress={() => setMode(m.id)}
+                  >
+                    <Text style={[styles.modeText, mode === m.id && styles.modeTextActive]}>{m.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-        <Text style={styles.section}>3. Brand label image</Text>
-        <View style={styles.imageRow}>
-          <TouchableOpacity style={styles.imageBox} onPress={() => pickImage('label')}>
-            {imageLabel ? (
-              <Image source={{ uri: imageLabel }} style={styles.preview} />
-            ) : (
-              <Text style={styles.placeholder}>Tap to select or capture</Text>
-            )}
-          </TouchableOpacity>
-          <View style={styles.imageActions}>
-            <TouchableOpacity style={styles.btnSecondary} onPress={() => pickImage('label')}>
-              <Text style={styles.btnSecondaryText}>Gallery</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.btnSecondary} onPress={() => captureImage('label')}>
-              <Text style={styles.btnSecondaryText}>Camera</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+              <Text style={styles.label}>Category</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyRow}>
+                {CATEGORIES.map((c) => (
+                  <TouchableOpacity
+                    key={c}
+                    style={[styles.storyCard, category === c && styles.storyCardActive]}
+                    onPress={() => setCategory(c)}
+                  >
+                    <View style={styles.storyFloor} />
+                    <Text style={styles.storyText}>{c}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-        <TouchableOpacity
-          style={[styles.submit, loading && styles.submitDisabled]}
-          onPress={estimatePrice}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitText}>Get price estimate</Text>
+              <Text style={styles.label}>Brand (includes pricey vs non-pricey tiers)</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.brandRow}>
+                {BRAND_OPTIONS.map((brand) => (
+                  <TouchableOpacity
+                    key={brand}
+                    style={[styles.brandChip, selectedBrand === brand && styles.brandChipActive]}
+                    onPress={() => setSelectedBrand(brand)}
+                  >
+                    <Text style={[styles.brandText, selectedBrand === brand && styles.brandTextActive]}>{brand}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, (!category || !selectedBrand) && styles.btnDisabled]}
+                disabled={!category || !selectedBrand}
+                onPress={() => goToStep(2)}
+              >
+                <Text style={styles.primaryBtnText}>Continue</Text>
+              </TouchableOpacity>
+            </View>
           )}
-        </TouchableOpacity>
 
-        {result && (
-          <View style={styles.result}>
-            <Text style={styles.resultTitle}>Estimated price</Text>
-            <Text style={styles.resultPrice}>₱ {result.estimated_price_php.toFixed(2)}</Text>
-            <Text style={styles.resultMeta}>Condition: {result.condition} · Brand: {result.brand}</Text>
-          </View>
-        )}
+          {step === 2 && (
+            <View>
+              <Text style={styles.sectionTitle}>Step 2 · Full item photo</Text>
+              <Text style={styles.stepHint}>Capture the entire item to assess condition.</Text>
+              <View style={styles.photoCard}>
+                <TouchableOpacity style={styles.photoBox} onPress={() => pickImage('full')}>
+                  {imageFull ? <Image source={{ uri: imageFull }} style={styles.preview} /> : <Text style={styles.placeholder}>Tap to add full item photo</Text>}
+                </TouchableOpacity>
+                <View style={styles.photoActions}>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => pickImage('full')}>
+                    <Text style={styles.secondaryBtnText}>Gallery</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => captureImage('full')}>
+                    <Text style={styles.secondaryBtnText}>Camera</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
 
-        <TouchableOpacity style={styles.reset} onPress={reset}>
-          <Text style={styles.resetText}>Start over</Text>
-        </TouchableOpacity>
+              <View style={styles.navRow}>
+                <TouchableOpacity style={styles.ghostBtn} onPress={() => goToStep(1)}>
+                  <Text style={styles.ghostBtnText}>Back</Text>
+                </TouchableOpacity>
+                {needsLabelImage ? (
+                  <TouchableOpacity style={[styles.primaryBtnSmall, !imageFull && styles.btnDisabled]} disabled={!imageFull} onPress={() => goToStep(3)}>
+                    <Text style={styles.primaryBtnText}>Next</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity style={[styles.primaryBtnSmall, (!imageFull || loading) && styles.btnDisabled]} disabled={!imageFull || loading} onPress={estimatePrice}>
+                    {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Estimate</Text>}
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          )}
+
+          {step === 3 && (
+            <View>
+              <Text style={styles.sectionTitle}>Step 3 · Brand label photo</Text>
+              <Text style={styles.stepHint}>Capture logo/tag for authenticity signal.</Text>
+              <View style={styles.photoCard}>
+                <TouchableOpacity style={styles.photoBox} onPress={() => pickImage('label')}>
+                  {imageLabel ? <Image source={{ uri: imageLabel }} style={styles.preview} /> : <Text style={styles.placeholder}>Tap to add brand label photo</Text>}
+                </TouchableOpacity>
+                <View style={styles.photoActions}>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => pickImage('label')}>
+                    <Text style={styles.secondaryBtnText}>Gallery</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => captureImage('label')}>
+                    <Text style={styles.secondaryBtnText}>Camera</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              <View style={styles.navRow}>
+                <TouchableOpacity style={styles.ghostBtn} onPress={() => goToStep(2)}>
+                  <Text style={styles.ghostBtnText}>Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.primaryBtnSmall, (!imageLabel || loading) && styles.btnDisabled]} disabled={!imageLabel || loading} onPress={estimatePrice}>
+                  {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Estimate</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {step === 4 && result && (
+            <View>
+              <Text style={styles.sectionTitle}>Step 4 · Price estimate</Text>
+              <View style={styles.resultCard}>
+                <Text style={styles.resultPrice}>PHP {result.estimated_price_php.toFixed(2)}</Text>
+                <Text style={styles.resultMeta}>Category: {category}</Text>
+                <Text style={styles.resultMeta}>Brand: {result.brand}</Text>
+                <Text style={styles.resultMeta}>Condition: {result.condition}</Text>
+                <Text style={styles.resultMeta}>Brand tier: {result.brand_tier || getBrandTier(result.brand)}</Text>
+                <Text style={styles.resultMeta}>Engine: {result.engine || 'unknown'}</Text>
+                {result.notes ? <Text style={styles.resultNotes}>{result.notes}</Text> : null}
+              </View>
+
+              <View style={styles.photoPreviewRow}>
+                {imageFull ? <Image source={{ uri: imageFull }} style={styles.resultPreview} /> : null}
+                {needsLabelImage && imageLabel ? <Image source={{ uri: imageLabel }} style={styles.resultPreview} /> : null}
+              </View>
+
+              <View style={styles.navRow}>
+                <TouchableOpacity style={styles.ghostBtn} onPress={() => goToStep(needsLabelImage ? 3 : 2)}>
+                  <Text style={styles.ghostBtnText}>Edit photos</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.primaryBtnSmall} onPress={resetAll}>
+                  <Text style={styles.primaryBtnText}>New estimate</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a2e',
+  container: { flex: 1, backgroundColor: '#12061F' },
+  scroll: { padding: 20, paddingBottom: 36 },
+  headerWrap: { marginBottom: 12, alignItems: 'center' },
+  appName: {
+    color: '#EAD9FF',
+    fontSize: 34,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textShadowColor: '#A855F7',
+    textShadowRadius: 10,
   },
-  scroll: {
-    padding: 20,
-    paddingBottom: 40,
+  tagline: { color: '#B7A6CC', fontSize: 13, marginTop: 6 },
+  sectionTitle: { color: '#E5D6FA', fontSize: 18, fontWeight: '700', marginBottom: 10 },
+  stepHint: { color: '#B7A6CC', marginBottom: 12 },
+  modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  modeChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#2A1640',
+    borderWidth: 1,
+    borderColor: '#3D225C',
   },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#eee',
-    marginBottom: 4,
+  modeChipActive: { backgroundColor: '#A855F7', borderColor: '#C084FC' },
+  modeText: { color: '#CBB8E6', fontSize: 12 },
+  modeTextActive: { color: '#12061F', fontWeight: '700' },
+  label: { color: '#D9C8F2', marginBottom: 8, fontWeight: '600' },
+  storyRow: { gap: 10, paddingBottom: 4, marginBottom: 12 },
+  storyCard: {
+    width: 108,
+    height: 140,
+    borderRadius: 14,
+    backgroundColor: '#1E0D33',
+    borderWidth: 1,
+    borderColor: '#35204F',
+    justifyContent: 'space-between',
+    padding: 10,
   },
-  subtitle: {
-    fontSize: 14,
-    color: '#889',
-    marginBottom: 24,
+  storyCardActive: { borderColor: '#C084FC', backgroundColor: '#2A1246' },
+  storyFloor: {
+    width: '100%',
+    height: 76,
+    borderRadius: 10,
+    backgroundColor: '#2E1748',
+    borderWidth: 1,
+    borderColor: '#4E2B74',
   },
-  section: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#b8b8d0',
-    marginTop: 16,
-    marginBottom: 8,
+  storyText: { color: '#E7DBFA', fontWeight: '700', textTransform: 'capitalize' },
+  brandRow: { gap: 8, paddingBottom: 6, marginBottom: 16 },
+  brandChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#231137',
+    borderWidth: 1,
+    borderColor: '#41245E',
   },
-  categoryRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  categoryChip: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: '#2d2d44',
-  },
-  categoryChipActive: {
-    backgroundColor: '#6c5ce7',
-  },
-  categoryText: {
-    color: '#aaa',
-    fontSize: 14,
-  },
-  categoryTextActive: {
-    color: '#fff',
-  },
-  imageRow: {
-    flexDirection: 'row',
+  brandChipActive: { borderColor: '#C084FC', backgroundColor: '#351A53' },
+  brandText: { color: '#D2C0EB', fontSize: 12 },
+  brandTextActive: { color: '#FFF', fontWeight: '700' },
+  primaryBtn: {
+    marginTop: 4,
+    backgroundColor: '#A855F7',
+    borderRadius: 14,
+    paddingVertical: 14,
     alignItems: 'center',
-    gap: 12,
   },
-  imageBox: {
-    width: 100,
-    height: 100,
+  primaryBtnSmall: {
+    minWidth: 120,
+    backgroundColor: '#A855F7',
     borderRadius: 12,
-    backgroundColor: '#2d2d44',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  primaryBtnText: { color: '#12061F', fontWeight: '800', fontSize: 14 },
+  btnDisabled: { opacity: 0.45 },
+  photoCard: {
+    backgroundColor: '#1B0D2D',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#3D225C',
+  },
+  photoBox: {
+    width: '100%',
+    height: 220,
+    borderRadius: 12,
+    backgroundColor: '#2C1644',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
+    marginBottom: 10,
   },
-  preview: {
-    width: '100%',
-    height: '100%',
-  },
-  placeholder: {
-    color: '#666',
-    fontSize: 11,
-    textAlign: 'center',
-  },
-  imageActions: {
-    gap: 8,
-  },
-  btnSecondary: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: '#2d2d44',
-    borderRadius: 8,
-  },
-  btnSecondaryText: {
-    color: '#b8b8d0',
-    fontSize: 13,
-  },
-  submit: {
-    marginTop: 28,
-    paddingVertical: 16,
-    borderRadius: 14,
-    backgroundColor: '#6c5ce7',
+  preview: { width: '100%', height: '100%' },
+  placeholder: { color: '#9F89BB', fontSize: 13, textAlign: 'center' },
+  photoActions: { flexDirection: 'row', gap: 10 },
+  secondaryBtn: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#5B3682',
+    backgroundColor: '#2C1644',
     alignItems: 'center',
   },
-  submitDisabled: {
-    opacity: 0.7,
-  },
-  submitText: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '600',
-  },
-  result: {
-    marginTop: 24,
-    padding: 20,
-    borderRadius: 14,
-    backgroundColor: '#16213e',
+  secondaryBtnText: { color: '#D8C6EE', fontWeight: '600' },
+  navRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, gap: 10 },
+  ghostBtn: {
+    minWidth: 120,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: '#2d2d44',
+    borderColor: '#5B3682',
+    alignItems: 'center',
   },
-  resultTitle: {
-    color: '#889',
-    fontSize: 14,
-    marginBottom: 4,
+  ghostBtnText: { color: '#D8C6EE', fontWeight: '700' },
+  resultCard: {
+    borderRadius: 14,
+    padding: 16,
+    backgroundColor: '#1E0D33',
+    borderWidth: 1,
+    borderColor: '#4E2B74',
+    marginBottom: 14,
   },
-  resultPrice: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: '#a29bfe',
-  },
-  resultMeta: {
-    color: '#889',
-    fontSize: 13,
-    marginTop: 8,
-  },
-  reset: {
-    marginTop: 20,
-    alignSelf: 'center',
-  },
-  resetText: {
-    color: '#6c5ce7',
-    fontSize: 15,
-  },
+  resultPrice: { color: '#EBDFFF', fontSize: 34, fontWeight: '800', marginBottom: 8 },
+  resultMeta: { color: '#D8C6EE', marginBottom: 4, textTransform: 'capitalize' },
+  resultNotes: { color: '#B7A6CC', marginTop: 6, fontSize: 12 },
+  photoPreviewRow: { flexDirection: 'row', gap: 10 },
+  resultPreview: { flex: 1, height: 140, borderRadius: 12, backgroundColor: '#2C1644' },
 });
