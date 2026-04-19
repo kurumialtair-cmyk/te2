@@ -8,7 +8,13 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build:apk": "eas build -p android --profile preview",
-    "build:aab": "eas build -p android --profile production"
+    "build:aab": "eas build -p android --profile production",
+    "prebuild:android": "expo prebuild --platform android",
+    "prebuild:android:clean": "expo prebuild --platform android --clean",
+    "build:apk:local": "npm run prebuild:android:clean && cd android && gradlew.bat assembleRelease",
+    "build:aab:local": "npm run prebuild:android:clean && cd android && gradlew.bat bundleRelease",
+    "build:apk:local:quick": "npm run prebuild:android && cd android && gradlew.bat assembleRelease",
+    "build:aab:local:quick": "npm run prebuild:android && cd android && gradlew.bat bundleRelease"
   },
   "dependencies": {
     "expo": "~51.0.0",

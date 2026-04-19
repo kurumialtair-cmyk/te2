@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { API_BASE } from './api';
 import { estimateOfflinePrice } from './offlineEstimator';
-import { BRAND_OPTIONS, getBrandTier } from './brandData';
+import { getBrandsByCategory, getBrandTier } from './brandData';
 import { roundPriceForMarketplace } from './priceUtils';
 
 const APP_NAME = 'Privies';
@@ -25,12 +25,15 @@ const MODES = [
   { id: 'offline', label: 'Offline only' },
   { id: 'online', label: 'Online only' },
 ];
+const CONDITION_OPTIONS = ['poor', 'fair', 'good', 'excellent'];
 
 export default function App() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState('auto');
   const [category, setCategory] = useState(null);
   const [selectedBrand, setSelectedBrand] = useState('unbranded');
+  const [manualCondition, setManualCondition] = useState(null);
+  const [photoCategoryMatch, setPhotoCategoryMatch] = useState(null);
   const [imageFull, setImageFull] = useState(null);
   const [imageLabel, setImageLabel] = useState(null);
   const [result, setResult] = useState(null);
@@ -38,6 +41,12 @@ export default function App() {
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
   const needsLabelImage = selectedBrand !== 'unbranded';
+  const brandOptions = useMemo(() => getBrandsByCategory(category), [category]);
+
+  useEffect(() => {
+    const nextBrands = getBrandsByCategory(category);
+    if (!nextBrands.includes(selectedBrand)) setSelectedBrand('unbranded');
+  }, [category, selectedBrand]);
 
   const goToStep = useCallback(
     (targetStep) => {
@@ -64,7 +73,10 @@ export default function App() {
     });
     if (picked.canceled) return;
     const uri = picked.assets[0].uri;
-    if (slot === 'full') setImageFull(uri);
+    if (slot === 'full') {
+      setImageFull(uri);
+      setPhotoCategoryMatch(null);
+    }
     else setImageLabel(uri);
   }, []);
 
@@ -81,7 +93,10 @@ export default function App() {
     });
     if (captured.canceled) return;
     const uri = captured.assets[0].uri;
-    if (slot === 'full') setImageFull(uri);
+    if (slot === 'full') {
+      setImageFull(uri);
+      setPhotoCategoryMatch(null);
+    }
     else setImageLabel(uri);
   }, []);
 
@@ -98,6 +113,9 @@ export default function App() {
   const estimateOnline = useCallback(async () => {
     const formData = new FormData();
     formData.append('category', category);
+    formData.append('manual_condition', manualCondition || '');
+    formData.append('photo_category_match', String(photoCategoryMatch === true));
+    formData.append('selected_brand', selectedBrand);
     formData.append('image_full', { uri: imageFull, type: 'image/jpeg', name: 'full.jpg' });
     if (needsLabelImage) {
       formData.append('image_label', { uri: imageLabel, type: 'image/jpeg', name: 'label.jpg' });
@@ -118,7 +136,7 @@ export default function App() {
 
     const data = await res.json();
     return applyRoundedResult(data);
-  }, [API_BASE, applyRoundedResult, category, imageFull, imageLabel, needsLabelImage]);
+  }, [API_BASE, applyRoundedResult, category, imageFull, imageLabel, manualCondition, needsLabelImage, photoCategoryMatch, selectedBrand]);
 
   const estimatePrice = useCallback(async () => {
     if (!category || !selectedBrand) {
@@ -127,6 +145,14 @@ export default function App() {
     }
     if (!imageFull) {
       Alert.alert('Add image', 'Please add the full item photo first.');
+      return;
+    }
+    if (!manualCondition) {
+      Alert.alert('Set condition', 'Please choose the item condition first.');
+      return;
+    }
+    if (photoCategoryMatch !== true) {
+      Alert.alert('Retake photo', `Photo does not clearly match "${category}". Please retake the image.`);
       return;
     }
     if (needsLabelImage && !imageLabel) {
@@ -144,6 +170,8 @@ export default function App() {
           imageFullUri: imageFull,
           imageLabelUri: imageLabel,
           selectedBrand,
+          manualCondition,
+          categoryPhotoConfirmed: photoCategoryMatch === true,
         });
         setResult(offline);
         goToStep(4);
@@ -155,7 +183,10 @@ export default function App() {
       goToStep(4);
     } catch (err) {
       if (mode === 'online') {
-        Alert.alert('Online estimate failed', err.message || 'Backend unreachable.');
+        Alert.alert(
+          'Online estimate failed',
+          `${err.message || 'Backend unreachable.'}\n\nSet EXPO_PUBLIC_API_BASE to your backend LAN URL (example: http://192.168.x.x:8000).`,
+        );
         return;
       }
 
@@ -164,6 +195,8 @@ export default function App() {
         imageFullUri: imageFull,
         imageLabelUri: imageLabel,
         selectedBrand,
+        manualCondition,
+        categoryPhotoConfirmed: photoCategoryMatch === true,
       });
       setResult(offline);
       goToStep(4);
@@ -171,12 +204,14 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, mode, estimateOnline, goToStep]);
+  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, manualCondition, photoCategoryMatch, mode, estimateOnline, goToStep]);
 
   const resetAll = useCallback(() => {
     setStep(1);
     setCategory(null);
     setSelectedBrand('unbranded');
+    setManualCondition(null);
+    setPhotoCategoryMatch(null);
     setImageFull(null);
     setImageLabel(null);
     setResult(null);
@@ -187,7 +222,6 @@ export default function App() {
     () => (
       <View style={styles.headerWrap}>
         <Text style={styles.appName}>{APP_NAME}</Text>
-        <Text style={styles.tagline}>Smart thrift pricing, online or offline</Text>
       </View>
     ),
     [],
@@ -217,31 +251,36 @@ export default function App() {
               </View>
 
               <Text style={styles.label}>Category</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storyRow}>
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
                 {CATEGORIES.map((c) => (
                   <TouchableOpacity
                     key={c}
-                    style={[styles.storyCard, category === c && styles.storyCardActive]}
+                    style={[styles.categoryItem, category === c && styles.categoryItemActive]}
                     onPress={() => setCategory(c)}
                   >
-                    <View style={styles.storyFloor} />
-                    <Text style={styles.storyText}>{c}</Text>
+                    <Text style={styles.categoryItemText}>{c}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
 
-              <Text style={styles.label}>Brand (includes pricey vs non-pricey tiers)</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.brandRow}>
-                {BRAND_OPTIONS.map((brand) => (
-                  <TouchableOpacity
-                    key={brand}
-                    style={[styles.brandChip, selectedBrand === brand && styles.brandChipActive]}
-                    onPress={() => setSelectedBrand(brand)}
-                  >
-                    <Text style={[styles.brandText, selectedBrand === brand && styles.brandTextActive]}>{brand}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              {category ? (
+                <>
+                  <Text style={styles.label}>Brand (tiered by resale value)</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.brandRow}>
+                    {brandOptions.map((brand) => (
+                      <TouchableOpacity
+                        key={brand}
+                        style={[styles.brandChip, selectedBrand === brand && styles.brandChipActive]}
+                        onPress={() => setSelectedBrand(brand)}
+                      >
+                        <Text style={[styles.brandText, selectedBrand === brand && styles.brandTextActive]}>{brand}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </>
+              ) : (
+                <Text style={styles.stepHint}>Choose a category first to load relevant brands.</Text>
+              )}
 
               <TouchableOpacity
                 style={[styles.primaryBtn, (!category || !selectedBrand) && styles.btnDisabled]}
@@ -271,16 +310,59 @@ export default function App() {
                 </View>
               </View>
 
+              <Text style={styles.label}>Condition</Text>
+              <View style={styles.modeRow}>
+                {CONDITION_OPTIONS.map((cond) => (
+                  <TouchableOpacity
+                    key={cond}
+                    style={[styles.modeChip, manualCondition === cond && styles.modeChipActive]}
+                    onPress={() => setManualCondition(cond)}
+                  >
+                    <Text style={[styles.modeText, manualCondition === cond && styles.modeTextActive]}>{cond}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={styles.label}>Does this photo clearly match "{category}"?</Text>
+              <View style={styles.modeRow}>
+                <TouchableOpacity
+                  style={[styles.modeChip, photoCategoryMatch === true && styles.modeChipActive]}
+                  onPress={() => setPhotoCategoryMatch(true)}
+                >
+                  <Text style={[styles.modeText, photoCategoryMatch === true && styles.modeTextActive]}>Yes</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modeChip, photoCategoryMatch === false && styles.modeChipActive]}
+                  onPress={() => setPhotoCategoryMatch(false)}
+                >
+                  <Text style={[styles.modeText, photoCategoryMatch === false && styles.modeTextActive]}>No</Text>
+                </TouchableOpacity>
+              </View>
+
               <View style={styles.navRow}>
                 <TouchableOpacity style={styles.ghostBtn} onPress={() => goToStep(1)}>
                   <Text style={styles.ghostBtnText}>Back</Text>
                 </TouchableOpacity>
                 {needsLabelImage ? (
-                  <TouchableOpacity style={[styles.primaryBtnSmall, !imageFull && styles.btnDisabled]} disabled={!imageFull} onPress={() => goToStep(3)}>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryBtnSmall,
+                      (!imageFull || !manualCondition || photoCategoryMatch !== true) && styles.btnDisabled,
+                    ]}
+                    disabled={!imageFull || !manualCondition || photoCategoryMatch !== true}
+                    onPress={() => goToStep(3)}
+                  >
                     <Text style={styles.primaryBtnText}>Next</Text>
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity style={[styles.primaryBtnSmall, (!imageFull || loading) && styles.btnDisabled]} disabled={!imageFull || loading} onPress={estimatePrice}>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryBtnSmall,
+                      (!imageFull || !manualCondition || photoCategoryMatch !== true || loading) && styles.btnDisabled,
+                    ]}
+                    disabled={!imageFull || !manualCondition || photoCategoryMatch !== true || loading}
+                    onPress={estimatePrice}
+                  >
                     {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Estimate</Text>}
                   </TouchableOpacity>
                 )}
@@ -363,7 +445,6 @@ const styles = StyleSheet.create({
     textShadowColor: '#A855F7',
     textShadowRadius: 10,
   },
-  tagline: { color: '#B7A6CC', fontSize: 13, marginTop: 6 },
   sectionTitle: { color: '#E5D6FA', fontSize: 18, fontWeight: '700', marginBottom: 10 },
   stepHint: { color: '#B7A6CC', marginBottom: 12 },
   modeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
@@ -379,27 +460,18 @@ const styles = StyleSheet.create({
   modeText: { color: '#CBB8E6', fontSize: 12 },
   modeTextActive: { color: '#12061F', fontWeight: '700' },
   label: { color: '#D9C8F2', marginBottom: 8, fontWeight: '600' },
-  storyRow: { gap: 10, paddingBottom: 4, marginBottom: 12 },
-  storyCard: {
-    width: 108,
-    height: 140,
+  categoryList: { gap: 10, paddingBottom: 4, marginBottom: 12 },
+  categoryItem: {
+    width: '100%',
     borderRadius: 14,
     backgroundColor: '#1E0D33',
     borderWidth: 1,
     borderColor: '#35204F',
-    justifyContent: 'space-between',
-    padding: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
   },
-  storyCardActive: { borderColor: '#C084FC', backgroundColor: '#2A1246' },
-  storyFloor: {
-    width: '100%',
-    height: 76,
-    borderRadius: 10,
-    backgroundColor: '#2E1748',
-    borderWidth: 1,
-    borderColor: '#4E2B74',
-  },
-  storyText: { color: '#E7DBFA', fontWeight: '700', textTransform: 'capitalize' },
+  categoryItemActive: { borderColor: '#C084FC', backgroundColor: '#2A1246' },
+  categoryItemText: { color: '#E7DBFA', fontWeight: '700', textTransform: 'capitalize', fontSize: 15 },
   brandRow: { gap: 8, paddingBottom: 6, marginBottom: 16 },
   brandChip: {
     paddingVertical: 8,

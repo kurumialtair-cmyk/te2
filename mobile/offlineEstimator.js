@@ -18,7 +18,6 @@ const CONDITION_MULTIPLIER = {
 };
 
 const CONDITIONS = ['poor', 'fair', 'good', 'excellent'];
-
 function hashString(input) {
   let h = 0;
   for (let i = 0; i < input.length; i += 1) {
@@ -28,21 +27,36 @@ function hashString(input) {
   return Math.abs(h);
 }
 
-export function estimateOfflinePrice({ category, imageFullUri, imageLabelUri, selectedBrand }) {
+export function estimateOfflinePrice({
+  category,
+  imageFullUri,
+  imageLabelUri,
+  selectedBrand,
+  manualCondition,
+  categoryPhotoConfirmed = true,
+}) {
   const fullHash = hashString(imageFullUri || '');
   const labelHash = hashString(imageLabelUri || '');
 
-  const condition = CONDITIONS[fullHash % CONDITIONS.length];
+  const autoCondition = CONDITIONS[fullHash % CONDITIONS.length];
+  const condition = (manualCondition || autoCondition).toLowerCase();
   const brand = (selectedBrand || BRAND_OPTIONS[labelHash % BRAND_OPTIONS.length]).toLowerCase();
 
   const base = BASE_PRICE_BY_CATEGORY[category] || BASE_PRICE_BY_CATEGORY.other;
-  const conditionMultiplier = CONDITION_MULTIPLIER[condition] || 1.0;
+  const conditionMultiplier = CONDITION_MULTIPLIER[condition] || CONDITION_MULTIPLIER[autoCondition] || 1.0;
   const brandTier = getBrandTier(brand);
   const brandMultiplier = BRAND_TIER_MULTIPLIER[brandTier] || 0.95;
 
   // Slight deterministic jitter for variety while staying stable per image pair.
   const jitter = 0.92 + ((fullHash + labelHash) % 17) / 100;
-  const estimated = Math.max(0, base * conditionMultiplier * brandMultiplier * jitter);
+  let estimated = Math.max(0, base * conditionMultiplier * brandMultiplier * jitter);
+
+  // Heavier penalty for damaged electronics to avoid unrealistic prices.
+  if (category === 'electronics' && condition === 'poor') estimated *= 0.45;
+  if (category === 'electronics' && condition === 'fair') estimated *= 0.8;
+  // If the user says the image does not match selected category, force low-confidence low value.
+  if (!categoryPhotoConfirmed) estimated *= 0.22;
+
   const rounded = roundPriceForMarketplace(estimated);
 
   return {
@@ -53,6 +67,8 @@ export function estimateOfflinePrice({ category, imageFullUri, imageLabelUri, se
     pricey_brand: isPriceyBrand(brand),
     estimated_price_php: Number(rounded.toFixed(2)),
     currency: 'PHP',
-    notes: 'Offline estimate mode: no backend/network required.',
+    notes: !categoryPhotoConfirmed
+      ? 'Photo/category mismatch was flagged. Estimate reduced and marked low-confidence.'
+      : 'Offline estimate mode: no backend/network required.',
   };
 }
