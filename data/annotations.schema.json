@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ThriftItemAnnotation",
+  "description": "Schema for labeled thrift items: condition, brand, category, and price (PHP)",
+  "type": "object",
+  "required": ["id", "category", "condition", "brand", "price_php", "image_full", "image_label"],
+  "properties": {
+    "id": { "type": "string" },
+    "category": { "type": "string", "enum": ["clothing", "bags", "shoes", "accessories", "electronics", "other"] },
+    "condition": { "type": "string", "enum": ["poor", "fair", "good", "excellent"] },
+    "brand": { "type": "string" },
+    "price_php": { "type": "number", "minimum": 0 },
+    "image_full": { "type": "string", "description": "Path to full item image" },
+    "image_label": { "type": "string", "description": "Path to brand label image" }
+  }
+}

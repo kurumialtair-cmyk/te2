@@ -1,0 +1,42 @@
+# Thrift Price Estimator - Configuration
+
+dataset:
+  data_dir: "data"
+  images_dir: "data/images"
+  annotations_file: "data/annotations.json"
+  categories: ["clothing", "bags", "shoes", "accessories", "electronics", "other"]
+  condition_labels: ["poor", "fair", "good", "excellent"]
+  # Add brand names as you collect data
+  brand_labels: ["unbranded", "local", "nike", "adidas", "levis", "zara", "h&m", "other_brand"]
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+models:
+  condition:
+    num_classes: 4
+    embedding_dim: 64
+    image_size: 224
+  brand:
+    num_classes: 8
+    embedding_dim: 64
+    image_size: 224
+  price:
+    condition_embed_dim: 64
+    brand_embed_dim: 64
+    category_embed_dim: 32
+    hidden_dims: [128, 64]
+    output_currency: "PHP"
+
+training:
+  batch_size: 32
+  condition_epochs: 20
+  brand_epochs: 20
+  price_epochs: 50
+  lr: 0.001
+  device: "cuda"  # or "cpu"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  max_image_size_mb: 5

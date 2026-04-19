@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "sample_1",
+      "category": "clothing",
+      "condition": "good",
+      "brand": "local",
+      "price_php": 150.0,
+      "image_full": "images/sample_full.jpg",
+      "image_label": "images/sample_label.jpg"
+    }
+  ],
+  "count": 1
+}
