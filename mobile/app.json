@@ -33,6 +33,7 @@
       "package": "com.aikssan.thriftpriceestimator"
     },
     "extra": {
+      "apiBase": "https://te2-ngw0.onrender.com",
       "eas": {
         "projectId": "14356357-cb3f-464d-83dd-d092acd24a36"
       }

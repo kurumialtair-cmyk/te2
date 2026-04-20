@@ -25,15 +25,14 @@ const MODES = [
   { id: 'offline', label: 'Offline only' },
   { id: 'online', label: 'Online only' },
 ];
-const CONDITION_OPTIONS = ['poor', 'fair', 'good', 'excellent'];
+const RETRYABLE_STATUS = new Set([502, 503, 504, 522, 524]);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function App() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState('auto');
   const [category, setCategory] = useState(null);
   const [selectedBrand, setSelectedBrand] = useState('unbranded');
-  const [manualCondition, setManualCondition] = useState(null);
-  const [photoCategoryMatch, setPhotoCategoryMatch] = useState(null);
   const [imageFull, setImageFull] = useState(null);
   const [imageLabel, setImageLabel] = useState(null);
   const [result, setResult] = useState(null);
@@ -75,7 +74,6 @@ export default function App() {
     const uri = picked.assets[0].uri;
     if (slot === 'full') {
       setImageFull(uri);
-      setPhotoCategoryMatch(null);
     }
     else setImageLabel(uri);
   }, []);
@@ -95,7 +93,6 @@ export default function App() {
     const uri = captured.assets[0].uri;
     if (slot === 'full') {
       setImageFull(uri);
-      setPhotoCategoryMatch(null);
     }
     else setImageLabel(uri);
   }, []);
@@ -111,32 +108,65 @@ export default function App() {
   }, [selectedBrand]);
 
   const estimateOnline = useCallback(async () => {
-    const formData = new FormData();
-    formData.append('category', category);
-    formData.append('manual_condition', manualCondition || '');
-    formData.append('photo_category_match', String(photoCategoryMatch === true));
-    formData.append('selected_brand', selectedBrand);
-    formData.append('image_full', { uri: imageFull, type: 'image/jpeg', name: 'full.jpg' });
-    if (needsLabelImage) {
-      formData.append('image_label', { uri: imageLabel, type: 'image/jpeg', name: 'label.jpg' });
-    } else {
-      formData.append('image_label', { uri: imageFull, type: 'image/jpeg', name: 'label.jpg' });
+    const buildFormData = () => {
+      const formData = new FormData();
+      formData.append('category', category);
+      formData.append('manual_condition', '');
+      formData.append('photo_category_match', 'true');
+      formData.append('selected_brand', selectedBrand);
+      formData.append('image_full', { uri: imageFull, type: 'image/jpeg', name: 'full.jpg' });
+      if (needsLabelImage) {
+        formData.append('image_label', { uri: imageLabel, type: 'image/jpeg', name: 'label.jpg' });
+      } else {
+        formData.append('image_label', { uri: imageFull, type: 'image/jpeg', name: 'label.jpg' });
+      }
+      return formData;
+    };
+
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const shouldRetry = attempt < 2;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+      try {
+        if (attempt > 0) {
+          // Render free instances can cold-start. Ping health and wait before retry.
+          try { await fetch(`${API_BASE}/health`); } catch (_) {}
+          await wait(2000 * attempt);
+        }
+        const res = await fetch(`${API_BASE}/estimate`, {
+          method: 'POST',
+          body: buildFormData(),
+          headers: { 'Content-Type': 'multipart/form-data' },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const errText = await res.text();
+          const isHtmlGateway = errText.includes('Bad Gateway') || errText.includes('cloudflare');
+          if (RETRYABLE_STATUS.has(res.status) || isHtmlGateway) {
+            throw new Error(`Transient backend error (${res.status})`);
+          }
+          throw new Error(errText || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        return applyRoundedResult(data);
+      } catch (err) {
+        clearTimeout(timeoutId);
+        lastError = err;
+        const msg = String(err?.message || '').toLowerCase();
+        const isTransient =
+          msg.includes('network request failed') ||
+          msg.includes('aborted') ||
+          msg.includes('timeout') ||
+          msg.includes('transient backend error');
+        if (!(shouldRetry && isTransient)) break;
+      }
     }
-
-    const res = await fetch(`${API_BASE}/estimate`, {
-      method: 'POST',
-      body: formData,
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || `HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    return applyRoundedResult(data);
-  }, [API_BASE, applyRoundedResult, category, imageFull, imageLabel, manualCondition, needsLabelImage, photoCategoryMatch, selectedBrand]);
+    throw lastError || new Error('Backend unavailable');
+  }, [API_BASE, applyRoundedResult, category, imageFull, imageLabel, needsLabelImage, selectedBrand]);
 
   const estimatePrice = useCallback(async () => {
     if (!category || !selectedBrand) {
@@ -145,14 +175,6 @@ export default function App() {
     }
     if (!imageFull) {
       Alert.alert('Add image', 'Please add the full item photo first.');
-      return;
-    }
-    if (!manualCondition) {
-      Alert.alert('Set condition', 'Please choose the item condition first.');
-      return;
-    }
-    if (photoCategoryMatch !== true) {
-      Alert.alert('Retake photo', `Photo does not clearly match "${category}". Please retake the image.`);
       return;
     }
     if (needsLabelImage && !imageLabel) {
@@ -170,8 +192,6 @@ export default function App() {
           imageFullUri: imageFull,
           imageLabelUri: imageLabel,
           selectedBrand,
-          manualCondition,
-          categoryPhotoConfirmed: photoCategoryMatch === true,
         });
         setResult(offline);
         goToStep(4);
@@ -182,36 +202,29 @@ export default function App() {
       setResult(onlineData);
       goToStep(4);
     } catch (err) {
-      if (mode === 'online') {
-        Alert.alert(
-          'Online estimate failed',
-          `${err.message || 'Backend unreachable.'}\n\nSet EXPO_PUBLIC_API_BASE to your backend LAN URL (example: http://192.168.x.x:8000).`,
-        );
-        return;
-      }
-
       const offline = estimateOfflinePrice({
         category,
         imageFullUri: imageFull,
         imageLabelUri: imageLabel,
         selectedBrand,
-        manualCondition,
-        categoryPhotoConfirmed: photoCategoryMatch === true,
       });
       setResult(offline);
       goToStep(4);
-      Alert.alert('Offline fallback', 'Network/backend unavailable. Offline estimate was used.');
+      Alert.alert(
+        mode === 'online' ? 'Backend warming up' : 'Offline fallback',
+        mode === 'online'
+          ? 'Render returned a temporary gateway/network error. Offline prediction was used now; retry in 20-60 seconds for live online output.'
+          : 'Network/backend unavailable. Offline estimate was used.',
+      );
     } finally {
       setLoading(false);
     }
-  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, manualCondition, photoCategoryMatch, mode, estimateOnline, goToStep]);
+  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, mode, estimateOnline, goToStep]);
 
   const resetAll = useCallback(() => {
     setStep(1);
     setCategory(null);
     setSelectedBrand('unbranded');
-    setManualCondition(null);
-    setPhotoCategoryMatch(null);
     setImageFull(null);
     setImageLabel(null);
     setResult(null);
@@ -236,8 +249,6 @@ export default function App() {
         <Animated.View style={{ opacity: fadeAnim }}>
           {step === 1 && (
             <View>
-              <Text style={styles.sectionTitle}>Step 1 · Choose category and brand</Text>
-
               <View style={styles.modeRow}>
                 {MODES.map((m) => (
                   <TouchableOpacity
@@ -265,7 +276,7 @@ export default function App() {
 
               {category ? (
                 <>
-                  <Text style={styles.label}>Brand (tiered by resale value)</Text>
+                  <Text style={styles.label}>Brand</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.brandRow}>
                     {brandOptions.map((brand) => (
                       <TouchableOpacity
@@ -294,8 +305,6 @@ export default function App() {
 
           {step === 2 && (
             <View>
-              <Text style={styles.sectionTitle}>Step 2 · Full item photo</Text>
-              <Text style={styles.stepHint}>Capture the entire item to assess condition.</Text>
               <View style={styles.photoCard}>
                 <TouchableOpacity style={styles.photoBox} onPress={() => pickImage('full')}>
                   {imageFull ? <Image source={{ uri: imageFull }} style={styles.preview} /> : <Text style={styles.placeholder}>Tap to add full item photo</Text>}
@@ -310,35 +319,6 @@ export default function App() {
                 </View>
               </View>
 
-              <Text style={styles.label}>Condition</Text>
-              <View style={styles.modeRow}>
-                {CONDITION_OPTIONS.map((cond) => (
-                  <TouchableOpacity
-                    key={cond}
-                    style={[styles.modeChip, manualCondition === cond && styles.modeChipActive]}
-                    onPress={() => setManualCondition(cond)}
-                  >
-                    <Text style={[styles.modeText, manualCondition === cond && styles.modeTextActive]}>{cond}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Does this photo clearly match "{category}"?</Text>
-              <View style={styles.modeRow}>
-                <TouchableOpacity
-                  style={[styles.modeChip, photoCategoryMatch === true && styles.modeChipActive]}
-                  onPress={() => setPhotoCategoryMatch(true)}
-                >
-                  <Text style={[styles.modeText, photoCategoryMatch === true && styles.modeTextActive]}>Yes</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modeChip, photoCategoryMatch === false && styles.modeChipActive]}
-                  onPress={() => setPhotoCategoryMatch(false)}
-                >
-                  <Text style={[styles.modeText, photoCategoryMatch === false && styles.modeTextActive]}>No</Text>
-                </TouchableOpacity>
-              </View>
-
               <View style={styles.navRow}>
                 <TouchableOpacity style={styles.ghostBtn} onPress={() => goToStep(1)}>
                   <Text style={styles.ghostBtnText}>Back</Text>
@@ -347,9 +327,9 @@ export default function App() {
                   <TouchableOpacity
                     style={[
                       styles.primaryBtnSmall,
-                      (!imageFull || !manualCondition || photoCategoryMatch !== true) && styles.btnDisabled,
+                      (!imageFull) && styles.btnDisabled,
                     ]}
-                    disabled={!imageFull || !manualCondition || photoCategoryMatch !== true}
+                    disabled={!imageFull}
                     onPress={() => goToStep(3)}
                   >
                     <Text style={styles.primaryBtnText}>Next</Text>
@@ -358,9 +338,9 @@ export default function App() {
                   <TouchableOpacity
                     style={[
                       styles.primaryBtnSmall,
-                      (!imageFull || !manualCondition || photoCategoryMatch !== true || loading) && styles.btnDisabled,
+                      (!imageFull || loading) && styles.btnDisabled,
                     ]}
-                    disabled={!imageFull || !manualCondition || photoCategoryMatch !== true || loading}
+                    disabled={!imageFull || loading}
                     onPress={estimatePrice}
                   >
                     {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Estimate</Text>}
