@@ -104,8 +104,9 @@ Add more categories/brands in `config/config.yaml` as needed.
 
 ## Deployment
 
-- **Backend**: Run behind gunicorn/uvicorn and a reverse proxy (e.g. Nginx). Ensure `models/` is present on the server and Python can import `training.models` (run from project root or set `PYTHONPATH`).
-- **Mobile**: Build with `expo build` or EAS; set `API_BASE` in `api.js` (or via env) to your production API URL.
+- **Backend (recommended)**: use Render + GitHub auto-deploy via `render.yaml`. Full steps: `DEPLOY_API_RENDER.md`.
+- **Backend (manual)**: run behind gunicorn/uvicorn and a reverse proxy (e.g. Nginx). Ensure `models/` is present and Python can import `training.models`.
+- **Mobile**: build with EAS/local and set `EXPO_PUBLIC_API_BASE` (or `expo.extra.apiBase`) to your production API URL.
 
 ## Requirements
 

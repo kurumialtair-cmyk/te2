@@ -19,10 +19,19 @@ app = FastAPI(
     title="Thrift Price Estimator API",
     description="Estimate thrift item prices from full-item and brand-label images.",
 )
+
+origins_env = os.getenv("ALLOWED_ORIGINS", "*")
+if origins_env.strip() == "*":
+    allow_origins = ["*"]
+    allow_credentials = False
+else:
+    allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
+    allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -43,6 +52,16 @@ def health():
     return {
         "status": "ok",
         "mode": "local_trained" if USE_LOCAL_TRAINED_MODELS else "pretrained_zero_shot",
+    }
+
+
+@app.get("/")
+def root():
+    return {
+        "name": "Thrift Price Estimator API",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/health",
     }
 
 
