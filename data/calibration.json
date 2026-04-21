@@ -1,0 +1,14 @@
+{
+  "version": "2026-04",
+  "pricePriors": {
+    "electronics::entry::fair": 680,
+    "electronics::entry::good": 920,
+    "clothing::mid::good": 320,
+    "bags::premium::good": 1450
+  },
+  "residualStd": {
+    "default": 0.18,
+    "electronics": 0.22,
+    "clothing": 0.14
+  }
+}
