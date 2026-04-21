@@ -9,6 +9,7 @@ import {
   Alert,
   Image,
   Animated,
+  TextInput,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,6 +32,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export default function App() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState('auto');
+  const [apiUrl, setApiUrl] = useState(API_BASE);
   const [category, setCategory] = useState(null);
   const [selectedBrand, setSelectedBrand] = useState('unbranded');
   const [imageFull, setImageFull] = useState(null);
@@ -108,6 +110,11 @@ export default function App() {
   }, [selectedBrand]);
 
   const estimateOnline = useCallback(async () => {
+    const normalizedApiBase = (apiUrl || '').trim().replace(/\/+$/, '');
+    if (!normalizedApiBase || !/^https?:\/\//i.test(normalizedApiBase)) {
+      throw new Error('Invalid API URL. Use http:// or https://');
+    }
+
     const buildFormData = () => {
       const formData = new FormData();
       formData.append('category', category);
@@ -131,10 +138,10 @@ export default function App() {
       try {
         if (attempt > 0) {
           // Render free instances can cold-start. Ping health and wait before retry.
-          try { await fetch(`${API_BASE}/health`); } catch (_) {}
+          try { await fetch(`${normalizedApiBase}/health`); } catch (_) {}
           await wait(2000 * attempt);
         }
-        const res = await fetch(`${API_BASE}/estimate`, {
+        const res = await fetch(`${normalizedApiBase}/estimate`, {
           method: 'POST',
           body: buildFormData(),
           headers: { 'Content-Type': 'multipart/form-data' },
@@ -166,7 +173,7 @@ export default function App() {
       }
     }
     throw lastError || new Error('Backend unavailable');
-  }, [API_BASE, applyRoundedResult, category, imageFull, imageLabel, needsLabelImage, selectedBrand]);
+  }, [apiUrl, applyRoundedResult, category, imageFull, imageLabel, needsLabelImage, selectedBrand]);
 
   const estimatePrice = useCallback(async () => {
     if (!category || !selectedBrand) {
@@ -260,6 +267,17 @@ export default function App() {
                   </TouchableOpacity>
                 ))}
               </View>
+              <Text style={styles.label}>Online API URL</Text>
+              <TextInput
+                value={apiUrl}
+                onChangeText={setApiUrl}
+                placeholder="https://te2-ngw0.onrender.com"
+                placeholderTextColor="#8F7AAE"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                style={styles.apiInput}
+              />
 
               <Text style={styles.label}>Category</Text>
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
@@ -440,6 +458,16 @@ const styles = StyleSheet.create({
   modeText: { color: '#CBB8E6', fontSize: 12 },
   modeTextActive: { color: '#12061F', fontWeight: '700' },
   label: { color: '#D9C8F2', marginBottom: 8, fontWeight: '600' },
+  apiInput: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#3D225C',
+    backgroundColor: '#1E0D33',
+    color: '#E7DBFA',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
   categoryList: { gap: 10, paddingBottom: 4, marginBottom: 12 },
   categoryItem: {
     width: '100%',
