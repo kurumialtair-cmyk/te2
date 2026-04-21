@@ -7,6 +7,7 @@ import os
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 
 try:
     from backend.pretrained_engine import get_pretrained_engine
@@ -107,3 +108,8 @@ async def estimate_price(
         raise HTTPException(503, "Local models missing. Either train models or use pretrained mode.")
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
