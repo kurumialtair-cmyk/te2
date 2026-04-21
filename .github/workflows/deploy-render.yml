@@ -1,0 +1,42 @@
+name: deploy-render
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "render.yaml"
+      - ".github/workflows/deploy-render.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "Missing RENDER_DEPLOY_HOOK secret"
+            exit 1
+          fi
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
+
+      - name: Post-deploy health check
+        env:
+          API_HEALTH_URL: ${{ secrets.API_HEALTH_URL }}
+        run: |
+          if [ -z "$API_HEALTH_URL" ]; then
+            echo "Missing API_HEALTH_URL secret"
+            exit 1
+          fi
+          for i in {1..30}; do
+            if curl -fsS "$API_HEALTH_URL/ready" >/dev/null; then
+              echo "Render ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Service did not become ready in time"
+          exit 1

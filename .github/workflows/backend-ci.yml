@@ -1,0 +1,50 @@
+name: backend-ci
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "render.yaml"
+      - ".github/workflows/backend-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "render.yaml"
+      - ".github/workflows/backend-ci.yml"
+
+jobs:
+  verify-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Lint syntax
+        run: python -m py_compile backend/main.py backend/pretrained_engine.py backend/ml_engine.py run_backend.py
+
+      - name: Dependency audit
+        run: |
+          pip install pip-audit
+          pip-audit -r backend/requirements.txt
+
+      - name: Smoke test API routes
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from backend.main import app
+          client = TestClient(app)
+          assert client.get("/").status_code == 200
+          assert client.get("/health").status_code == 200
+          assert client.get("/ready").status_code in (200, 503)
+          print("smoke-ok")
+          PY
+
