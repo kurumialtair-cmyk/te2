@@ -79,9 +79,24 @@ def prepare_dataset():
         items = sample
         print("Created sample annotations. Add real data to data/annotations.json and image paths under data/.")
 
+    valid_items = []
+    skipped = 0
+    for item in items:
+        full_path = data_dir / str(item.get("image_full", ""))
+        label_path = data_dir / str(item.get("image_label", ""))
+        if full_path.exists() and label_path.exists():
+            valid_items.append(item)
+        else:
+            skipped += 1
+    if skipped:
+        print(f"Skipped {skipped} items with missing image files.")
+    items = valid_items or items
+
     train_ratio = ds.get("train_ratio", 0.8)
     val_ratio = ds.get("val_ratio", 0.1)
     test_ratio = ds.get("test_ratio", 0.1)
+    if abs((train_ratio + val_ratio + test_ratio) - 1.0) > 0.001:
+        raise ValueError("train_ratio + val_ratio + test_ratio must equal 1.0")
     train, val, test = create_splits(items, train_ratio, val_ratio, test_ratio)
 
     SPLITS_DIR.mkdir(parents=True, exist_ok=True)

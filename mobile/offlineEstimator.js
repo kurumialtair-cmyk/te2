@@ -1,5 +1,6 @@
 import { BRAND_OPTIONS, BRAND_TIER_MULTIPLIER, getBrandTier, isPriceyBrand } from './brandData';
 import { roundPriceForMarketplace } from './priceUtils';
+import { getPricePrior, getResidualStd } from './calibrationCache';
 
 const BASE_PRICE_BY_CATEGORY = {
   clothing: 280,
@@ -27,6 +28,22 @@ function hashString(input) {
   return Math.abs(h);
 }
 
+function seededRandom(seedInput) {
+  let seed = hashString(seedInput) % 2147483647;
+  if (seed <= 0) seed += 2147483646;
+  seed = (seed * 16807) % 2147483647;
+  return (seed - 1) / 2147483646;
+}
+
+function deriveCondition(imageUri) {
+  const h = hashString(imageUri || '');
+  const normalized = (h % 1000) / 1000;
+  if (normalized < 0.2) return 'poor';
+  if (normalized < 0.5) return 'fair';
+  if (normalized < 0.82) return 'good';
+  return 'excellent';
+}
+
 export function estimateOfflinePrice({
   category,
   imageFullUri,
@@ -34,11 +51,13 @@ export function estimateOfflinePrice({
   selectedBrand,
   manualCondition,
   categoryPhotoConfirmed = true,
+  calibration,
 }) {
   const fullHash = hashString(imageFullUri || '');
   const labelHash = hashString(imageLabelUri || '');
+  const seedInput = `${imageFullUri || ''}|${imageLabelUri || ''}|${category || ''}|${selectedBrand || ''}`;
 
-  const autoCondition = CONDITIONS[fullHash % CONDITIONS.length];
+  const autoCondition = manualCondition || deriveCondition(imageFullUri);
   const condition = (manualCondition || autoCondition).toLowerCase();
   const brand = (selectedBrand || BRAND_OPTIONS[labelHash % BRAND_OPTIONS.length]).toLowerCase();
 
@@ -46,10 +65,10 @@ export function estimateOfflinePrice({
   const conditionMultiplier = CONDITION_MULTIPLIER[condition] || CONDITION_MULTIPLIER[autoCondition] || 1.0;
   const brandTier = getBrandTier(brand);
   const brandMultiplier = BRAND_TIER_MULTIPLIER[brandTier] || 0.95;
+  const prior = getPricePrior(calibration, category, brandTier, condition);
 
-  // Slight deterministic jitter for variety while staying stable per image pair.
-  const jitter = 0.92 + ((fullHash + labelHash) % 17) / 100;
-  let estimated = Math.max(0, base * conditionMultiplier * brandMultiplier * jitter);
+  const qualitySignal = 0.9 + seededRandom(`${seedInput}:quality`) * 0.2;
+  let estimated = Math.max(0, (prior || base) * conditionMultiplier * brandMultiplier * qualitySignal);
 
   // Heavier penalty for damaged electronics to avoid unrealistic prices.
   if (category === 'electronics' && condition === 'poor') estimated *= 0.45;
@@ -58,6 +77,10 @@ export function estimateOfflinePrice({
   if (!categoryPhotoConfirmed) estimated *= 0.22;
 
   const rounded = roundPriceForMarketplace(estimated);
+  const std = getResidualStd(calibration, category);
+  const p50 = Number(rounded.toFixed(2));
+  const p10 = Number(roundPriceForMarketplace(Math.max(0, estimated * (1 - std))).toFixed(2));
+  const p90 = Number(roundPriceForMarketplace(Math.max(0, estimated * (1 + std))).toFixed(2));
 
   return {
     engine: 'offline_fallback_estimator',
@@ -65,10 +88,12 @@ export function estimateOfflinePrice({
     brand,
     brand_tier: brandTier,
     pricey_brand: isPriceyBrand(brand),
-    estimated_price_php: Number(rounded.toFixed(2)),
+    estimated_price_php: p50,
+    estimated_price_band_php: { p10, p50, p90 },
+    confidence: Number((1 - std).toFixed(4)),
     currency: 'PHP',
     notes: !categoryPhotoConfirmed
       ? 'Photo/category mismatch was flagged. Estimate reduced and marked low-confidence.'
-      : 'Offline estimate mode: no backend/network required.',
+      : `Offline estimate mode with calibration ${calibration?.version || 'default'}.`,
   };
 }

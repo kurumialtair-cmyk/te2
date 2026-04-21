@@ -74,3 +74,15 @@ Choose one of these:
 - Keep model mode in env:
   - `USE_LOCAL_TRAINED_MODELS=0` (pretrained mode)
   - `USE_LOCAL_TRAINED_MODELS=1` (custom local model files)
+
+## 6) CI/CD gates
+
+This repo now includes:
+
+- `.github/workflows/backend-ci.yml` for syntax + route smoke checks
+- `.github/workflows/deploy-render.yml` for deploy hook + readiness verification
+
+Set these repository secrets:
+
+- `RENDER_DEPLOY_HOOK` = Render deploy hook URL
+- `API_HEALTH_URL` = `https://te2-ngw0.onrender.com`

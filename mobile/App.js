@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { API_BASE } from './api';
 import { estimateOfflinePrice } from './offlineEstimator';
+import { fetchCalibration } from './calibrationCache';
 import { getBrandsByCategory, getBrandTier } from './brandData';
 import { roundPriceForMarketplace } from './priceUtils';
 
@@ -38,6 +39,7 @@ export default function App() {
   const [imageFull, setImageFull] = useState(null);
   const [imageLabel, setImageLabel] = useState(null);
   const [result, setResult] = useState(null);
+  const [calibration, setCalibration] = useState(null);
   const [loading, setLoading] = useState(false);
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
@@ -48,6 +50,16 @@ export default function App() {
     const nextBrands = getBrandsByCategory(category);
     if (!nextBrands.includes(selectedBrand)) setSelectedBrand('unbranded');
   }, [category, selectedBrand]);
+
+  useEffect(() => {
+    let active = true;
+    const loadCalibration = async () => {
+      const c = await fetchCalibration(apiUrl);
+      if (active) setCalibration(c);
+    };
+    loadCalibration();
+    return () => { active = false; };
+  }, [apiUrl]);
 
   const goToStep = useCallback(
     (targetStep) => {
@@ -199,6 +211,7 @@ export default function App() {
           imageFullUri: imageFull,
           imageLabelUri: imageLabel,
           selectedBrand,
+          calibration,
         });
         setResult(offline);
         goToStep(4);
@@ -214,6 +227,7 @@ export default function App() {
         imageFullUri: imageFull,
         imageLabelUri: imageLabel,
         selectedBrand,
+        calibration,
       });
       setResult(offline);
       goToStep(4);
@@ -226,7 +240,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, mode, estimateOnline, goToStep]);
+  }, [category, selectedBrand, imageFull, imageLabel, needsLabelImage, mode, estimateOnline, goToStep, calibration]);
 
   const resetAll = useCallback(() => {
     setStep(1);
@@ -407,6 +421,12 @@ export default function App() {
                 <Text style={styles.resultMeta}>Condition: {result.condition}</Text>
                 <Text style={styles.resultMeta}>Brand tier: {result.brand_tier || getBrandTier(result.brand)}</Text>
                 <Text style={styles.resultMeta}>Engine: {result.engine || 'unknown'}</Text>
+                {result.estimated_price_band_php ? (
+                  <Text style={styles.resultMeta}>
+                    Band: P10 {result.estimated_price_band_php.p10.toFixed(2)} · P50 {result.estimated_price_band_php.p50.toFixed(2)} · P90 {result.estimated_price_band_php.p90.toFixed(2)}
+                  </Text>
+                ) : null}
+                {result.confidence ? <Text style={styles.resultMeta}>Confidence: {(result.confidence * 100).toFixed(1)}%</Text> : null}
                 {result.notes ? <Text style={styles.resultNotes}>{result.notes}</Text> : null}
               </View>
 
